@@ -1,5 +1,5 @@
 print("Hello, Javascript!")
 
-createHttpServer('5005', () => {
-    print("Hello, World")
+createHttpServer(5005, () => {
+    print("Server iniciado")
 })
