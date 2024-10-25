@@ -16,6 +16,16 @@ typedef struct {
     uv_buf_t buf;
 } write_req_t;
 
+// run out of options
+// But maybe change this to GetAlignedPointerFromInternalField?
+uv_stream_t *globalClient = nullptr;
+
+// samples/shell.c
+// Extracts a C string from a V8 Utf8Value.
+const char* ToCString(const v8::String::Utf8Value& value) {
+    return *value ? *value : "<string conversion failed>";
+}
+
 void alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
     buf->base = (char*) malloc(suggested_size);
     buf->len = suggested_size;
@@ -23,7 +33,8 @@ void alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
 
 void echo_write(uv_write_t *req, int status) {
     if(!status) {
-        fprintf(stderr, "Write error %s", uv_strerror(status));
+        // this always got a error, but i dont know why
+        // fprintf(stderr, "Write error %s", uv_strerror(status));
     }
     free(req);
 }
@@ -40,19 +51,33 @@ std::string gen_response(int size, const char *body) {
 }
 
 
-void PathFunction(const v8::FunctionCallbackInfo<v8::Value>& args) {
-    args.GetReturnValue().Set(v8::String::NewFromUtf8(args.GetIsolate(), "path").ToLocalChecked());
+void WriteFunc(const v8::FunctionCallbackInfo<v8::Value>& args) {
+
+    // Aloca memória para a requisição de escrita
+    write_req_t *req = (write_req_t*)malloc(sizeof(write_req_t));
+
+    v8::String::Utf8Value str(args.GetIsolate(), args[0]);
+    const char *c = ToCString(str);
+
+    // Gera a resposta HTTP
+    std::string h = gen_response(str.length(), c);
+    const char *http_response = h.c_str();
+    req->buf = uv_buf_init(const_cast<char*>(http_response), strlen(http_response));
+
+    // Realiza a escrita e verifica se houve erro
+    int result = uv_write((uv_write_t*)req, globalClient, &req->buf, 1, echo_write);
 }
 
 
 void echo_read(uv_stream_t *client, ssize_t nread, const uv_buf_t *buf) {
-        const v8::FunctionCallbackInfo<v8::Value>&info = *reinterpret_cast<const v8::FunctionCallbackInfo<v8::Value>*>(client->data);
-        v8::Local<v8::Object> reqObj = v8::Object::New(info.GetIsolate());
+    const v8::FunctionCallbackInfo<v8::Value>&info = *reinterpret_cast<const v8::FunctionCallbackInfo<v8::Value>*>(client->data);
+    globalClient = client;
+    v8::Local<v8::Object> reqObj = v8::Object::New(info.GetIsolate());
+    v8::Local<v8::Object> resObj = v8::Object::New(info.GetIsolate());
 
-        v8::Local<v8::Function> callback = v8::Local<v8::Function>::Cast(info[2]);
+    v8::Local<v8::Function> callback = v8::Local<v8::Function>::Cast(info[2]);
 
     if(nread > 0)  {
-        write_req_t *req = (write_req_t*)malloc(sizeof(write_req_t));
 
         // rudimentary HTTP parser
         std::string data(buf->base);
@@ -61,9 +86,9 @@ void echo_read(uv_stream_t *client, ssize_t nread, const uv_buf_t *buf) {
         std::string method_ = data.substr(0, first_space);
 
         size_t barra = data.find("/", first_space);
-        size_t next_space = data.find(" ", barra - 1);
+        size_t next_space = data.find(" ", barra);
 
-        std::string path_ = data.substr(barra, next_space - 2);
+        std::string path_ = data.substr(barra, next_space - 4);
         // ----------------------------------------------------
 
         v8::Local<v8::String> path_string = v8::String::NewFromUtf8(info.GetIsolate(), path_.c_str()).ToLocalChecked();
@@ -76,46 +101,35 @@ void echo_read(uv_stream_t *client, ssize_t nread, const uv_buf_t *buf) {
         reqObj->Set(info.GetIsolate()->GetCurrentContext(),
                     v8::String::NewFromUtf8(info.GetIsolate(), "method").ToLocalChecked(), 
                     method_string).Check();
+        
 
-        v8::Local<v8::Value> args[1] = { reqObj };
+        v8::Local<v8::Function> func = v8::Function::New(info.GetIsolate()->GetCurrentContext(), WriteFunc).ToLocalChecked();
+        resObj->Set(info.GetIsolate()->GetCurrentContext(), 
+                    v8::String::NewFromUtf8(info.GetIsolate(), "write").ToLocalChecked(),
+                    func).Check();
 
-        callback->Call(info.GetIsolate()->GetCurrentContext(), v8::Undefined(info.GetIsolate()), 1, args).ToLocalChecked();
+        v8::Local<v8::Value> args[2] = { reqObj, resObj };
 
-        // res.write();
-        // std::string h = gen_response(13, "Hello, World!").c_str();
-        // const char *http_response = h.c_str();
-        // req->buf = uv_buf_init((char*)http_response, strlen(http_response));
-        // uv_write((uv_write_t*) req, client, &req->buf, 1, echo_write);
+        callback->Call(info.GetIsolate()->GetCurrentContext(), v8::Undefined(info.GetIsolate()), 2, args).ToLocalChecked();
+        
         return;
     }
 
     free(buf->base);
 }
 
-// samples/shell.c
-// Extracts a C string from a V8 Utf8Value.
-const char* ToCString(const v8::String::Utf8Value& value) {
-    return *value ? *value : "<string conversion failed>";
-}
-
-
-void fn(const v8::FunctionCallbackInfo<v8::Value>& args) {
-    printf("Chamou fn\n");
-}
 
 // Don't think this is good. But my C++ isnt that sharp
 void on_new_connection(uv_stream_t *server, int status) {
     uv_tcp_t *client = (uv_tcp_t*)malloc(sizeof(uv_tcp_t));
+    //pretty sure this is insecure
     client->data = server->data;
     uv_tcp_init(loop, client);
-
 
     if(uv_accept(server, (uv_stream_t*)client) == 0) {
 
         uv_read_start((uv_stream_t*) client, alloc_buffer, echo_read);
-
        
-        printf("Nova conexão: %d\n", status);
     }
 
     return;

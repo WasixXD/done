@@ -6,8 +6,13 @@ const port = 5000
 function cb(req, res) {
     const path = req.path;
     const method = req.method;
-
-    print(`Nova requisição ${method} para o caminho ${path}`, path === "/")
+    print(`Got new req ${method} to path: ${path}`)
+    print(path === "/")
+    if(path === "/") {
+        res.write("Hello, World\n")
+    } else if(path === "/about") {
+        res.write("/about/\n")
+    }
 }
 
 createHttpServer(port, () => {
