@@ -11,6 +11,87 @@
 
 uv_loop_t *loop;
 
+typedef struct {
+    uv_write_t req;
+    uv_buf_t buf;
+} write_req_t;
+
+void alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
+    buf->base = (char*) malloc(suggested_size);
+    buf->len = suggested_size;
+}
+
+void echo_write(uv_write_t *req, int status) {
+    if(!status) {
+        fprintf(stderr, "Write error %s", uv_strerror(status));
+    }
+    free(req);
+}
+
+std::string gen_response(int size, const char *body) {
+    std::stringstream ss;
+    ss << "HTTP/1.1 200 OK\r\n";
+    ss << "Content-Type: text/plain\r\n";
+    ss << "Content-Length:" << size << "\r\n";
+    ss << "\r\n";
+    ss << body;
+    std::string tmp = ss.str();
+    return tmp;
+}
+
+
+void PathFunction(const v8::FunctionCallbackInfo<v8::Value>& args) {
+    args.GetReturnValue().Set(v8::String::NewFromUtf8(args.GetIsolate(), "path").ToLocalChecked());
+}
+
+
+void echo_read(uv_stream_t *client, ssize_t nread, const uv_buf_t *buf) {
+        const v8::FunctionCallbackInfo<v8::Value>&info = *reinterpret_cast<const v8::FunctionCallbackInfo<v8::Value>*>(client->data);
+        v8::Local<v8::Object> reqObj = v8::Object::New(info.GetIsolate());
+
+        v8::Local<v8::Function> callback = v8::Local<v8::Function>::Cast(info[2]);
+
+    if(nread > 0)  {
+        write_req_t *req = (write_req_t*)malloc(sizeof(write_req_t));
+
+        // rudimentary HTTP parser
+        std::string data(buf->base);
+
+        size_t first_space = data.find(" ");
+        std::string method_ = data.substr(0, first_space);
+
+        size_t barra = data.find("/", first_space);
+        size_t next_space = data.find(" ", barra - 1);
+
+        std::string path_ = data.substr(barra, next_space - 2);
+        // ----------------------------------------------------
+
+        v8::Local<v8::String> path_string = v8::String::NewFromUtf8(info.GetIsolate(), path_.c_str()).ToLocalChecked();
+        v8::Local<v8::String> method_string = v8::String::NewFromUtf8(info.GetIsolate(), method_.c_str()).ToLocalChecked();
+
+        // set the fields into the req object
+        reqObj->Set(info.GetIsolate()->GetCurrentContext(),
+                    v8::String::NewFromUtf8(info.GetIsolate(), "path").ToLocalChecked(), 
+                    path_string).Check();
+        reqObj->Set(info.GetIsolate()->GetCurrentContext(),
+                    v8::String::NewFromUtf8(info.GetIsolate(), "method").ToLocalChecked(), 
+                    method_string).Check();
+
+        v8::Local<v8::Value> args[1] = { reqObj };
+
+        callback->Call(info.GetIsolate()->GetCurrentContext(), v8::Undefined(info.GetIsolate()), 1, args).ToLocalChecked();
+
+        // res.write();
+        // std::string h = gen_response(13, "Hello, World!").c_str();
+        // const char *http_response = h.c_str();
+        // req->buf = uv_buf_init((char*)http_response, strlen(http_response));
+        // uv_write((uv_write_t*) req, client, &req->buf, 1, echo_write);
+        return;
+    }
+
+    free(buf->base);
+}
+
 // samples/shell.c
 // Extracts a C string from a V8 Utf8Value.
 const char* ToCString(const v8::String::Utf8Value& value) {
@@ -18,26 +99,42 @@ const char* ToCString(const v8::String::Utf8Value& value) {
 }
 
 
+void fn(const v8::FunctionCallbackInfo<v8::Value>& args) {
+    printf("Chamou fn\n");
+}
+
 // Don't think this is good. But my C++ isnt that sharp
 void on_new_connection(uv_stream_t *server, int status) {
     uv_tcp_t *client = (uv_tcp_t*)malloc(sizeof(uv_tcp_t));
+    client->data = server->data;
     uv_tcp_init(loop, client);
 
+
     if(uv_accept(server, (uv_stream_t*)client) == 0) {
+
+        uv_read_start((uv_stream_t*) client, alloc_buffer, echo_read);
+
+       
         printf("Nova conexão: %d\n", status);
     }
 
     return;
 }
-int startServer(int port) {
+int startServer(int port, const v8::FunctionCallbackInfo<v8::Value>& info) {
     uv_tcp_t server;
-    uv_tcp_init(loop, &server);
 
+    // very dangerous pointer manipulation
+    void *info_ptr = (void*)&info;
+    server.data = info_ptr;
+
+    v8::Local<v8::Function> callback = v8::Local<v8::Function>::Cast(info[1]);
+    callback->Call(info.GetIsolate()->GetCurrentContext(), v8::Undefined(info.GetIsolate()), 0, nullptr).ToLocalChecked();
+
+    uv_tcp_init(loop, &server);
     struct sockaddr_in bind_addr;
     uv_ip4_addr("localhost", port, &bind_addr);
     uv_tcp_bind(&server, (struct sockaddr *)&bind_addr, 0);
     int r = uv_listen((uv_stream_t*) &server, 128, on_new_connection);
-    printf("Server iniciado\n");
     if(r) {
         printf("Erro ao ouvir\n");
     }
@@ -82,10 +179,10 @@ class Done {
                 info.GetIsolate()->ThrowException(v8::String::NewFromUtf8(info.GetIsolate(), "Second parameter needs to be a callback").ToLocalChecked());
                 return; 
             }
-            v8::Local<v8::Function> callback = v8::Local<v8::Function>::Cast(info[1]);
-            int result = startServer(port);
+            // v8::Local<v8::Function> callback = v8::Local<v8::Function>::Cast(info[1]);
+            // callback->Call(info.GetIsolate()->GetCurrentContext(), v8::Undefined(info.GetIsolate()), 0, nullptr).ToLocalChecked();
+            int result = startServer(port, info);
         
-            callback->Call(info.GetIsolate()->GetCurrentContext(), v8::Undefined(info.GetIsolate()), 0, nullptr).ToLocalChecked();
         }
 
         static void Input(const v8::FunctionCallbackInfo<v8::Value>& info) {
