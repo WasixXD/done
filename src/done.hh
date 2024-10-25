@@ -55,6 +55,7 @@ class Done {
         static void Print(const v8::FunctionCallbackInfo<v8::Value>& info) {
             v8::HandleScope handle_scope(info.GetIsolate());
             for(int i = 0; i < info.Length(); i++) {
+                if(i != 0) printf(" ");
                 v8::String::Utf8Value str(info.GetIsolate(), info[i]);
                 const char *c = ToCString(str);
                 printf("%s", c);
@@ -87,6 +88,16 @@ class Done {
             callback->Call(info.GetIsolate()->GetCurrentContext(), v8::Undefined(info.GetIsolate()), 0, nullptr).ToLocalChecked();
         }
 
+        static void Input(const v8::FunctionCallbackInfo<v8::Value>& info) {
+            v8::HandleScope handle_scope(info.GetIsolate());
+            v8::String::Utf8Value str(info.GetIsolate(), info[0]);
+            const char *c = ToCString(str);
+            std::string input;
+            std::cout << c;
+            std::cin >> input;
+            auto response = v8::String::NewFromUtf8(info.GetIsolate(), input.c_str(), v8::NewStringType::kNormal).ToLocalChecked(); 
+            info.GetReturnValue().Set(response);
+        }
 
         v8::MaybeLocal<v8::String> readFile(const char* file_path) {
 
@@ -136,6 +147,7 @@ class Done {
             v8::Local<v8::ObjectTemplate> global = v8::ObjectTemplate::New(GetIsolate());
             global->Set(GetIsolate(), "print", v8::FunctionTemplate::New(GetIsolate(), this->Print));
             global->Set(GetIsolate(), "createHttpServer", v8::FunctionTemplate::New(GetIsolate(), this->httpServer));
+            global->Set(GetIsolate(), "input", v8::FunctionTemplate::New(GetIsolate(), this->Input));
             
             // Gen a new context (new script -> new context) and change the global one
             v8::Local<v8::Context> context = v8::Context::New(GetIsolate(), nullptr, global);

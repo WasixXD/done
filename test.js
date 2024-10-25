@@ -1,5 +1,7 @@
 print("Hello, Javascript!")
 
-createHttpServer(5005, () => {
+const port = Number(input("Qual a porta do servidor? > "))
+
+createHttpServer(port, () => {
     print("Server iniciado")
 })
