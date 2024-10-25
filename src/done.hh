@@ -53,18 +53,15 @@ std::string gen_response(int size, const char *body) {
 
 void WriteFunc(const v8::FunctionCallbackInfo<v8::Value>& args) {
 
-    // Aloca memória para a requisição de escrita
     write_req_t *req = (write_req_t*)malloc(sizeof(write_req_t));
 
     v8::String::Utf8Value str(args.GetIsolate(), args[0]);
     const char *c = ToCString(str);
 
-    // Gera a resposta HTTP
     std::string h = gen_response(str.length(), c);
     const char *http_response = h.c_str();
     req->buf = uv_buf_init(const_cast<char*>(http_response), strlen(http_response));
 
-    // Realiza a escrita e verifica se houve erro
     int result = uv_write((uv_write_t*)req, globalClient, &req->buf, 1, echo_write);
 }
 
@@ -193,8 +190,6 @@ class Done {
                 info.GetIsolate()->ThrowException(v8::String::NewFromUtf8(info.GetIsolate(), "Second parameter needs to be a callback").ToLocalChecked());
                 return; 
             }
-            // v8::Local<v8::Function> callback = v8::Local<v8::Function>::Cast(info[1]);
-            // callback->Call(info.GetIsolate()->GetCurrentContext(), v8::Undefined(info.GetIsolate()), 0, nullptr).ToLocalChecked();
             int result = startServer(port, info);
         
         }
